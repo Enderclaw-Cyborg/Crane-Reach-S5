@@ -1,4 +1,4 @@
-##AI Disclosure
+## AI Disclosure
 
 I had to restructure the agent from the ground up due to errors with the previous seasons. Allies no longer form a phalanx around the archers and should properly avoid negative terrain.
 
