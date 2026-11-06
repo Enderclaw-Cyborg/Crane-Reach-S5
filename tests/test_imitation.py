@@ -85,6 +85,22 @@ def training_row(observation=None, choice=0, seed=0):
     return {**row, "seed": seed, "seat": 0, "driver": "teacher"}
 
 
+class FixedMovePolicy:
+    """Keep movement preferences testable without training a model."""
+
+    def __init__(self, move_scores):
+        self.move_scores = move_scores
+
+    def encode(self, entities, entity_mask):
+        return entities.new_zeros((1, 1, 1))
+
+    def score_moves(self, context, entity_mask, options, candidate_mask):
+        return options.new_tensor([self.move_scores])
+
+    def score_targets(self, context, options, indices, candidate_mask):
+        return options.new_zeros(options.shape[:2])
+
+
 @pytest.fixture(autouse=True)
 def _small_and_repeatable():
     torch.set_num_threads(1)
@@ -159,6 +175,32 @@ def test_a_checkpoint_round_trips_and_refuses_another_encoder(tmp_path):
     torch.save(saved, path)
     with pytest.raises(ValueError, match="encoder"):
         load_policy(path)
+
+
+def test_archers_retreat_while_staying_in_attack_range():
+    observation = sample_observation(kind="archer")
+    observation["action_mask"]["path"][5] = 1
+
+    action = choose_action(FixedMovePolicy([0.0, 0.0, 0.0, 0.0]), observation)
+
+    assert action["path"] == 5
+
+
+def test_cavalry_uses_its_longest_legal_move():
+    observation = sample_observation(kind="cavalry")
+
+    action = choose_action(FixedMovePolicy([10.0, 0.0, 0.0]), observation)
+
+    assert action["path"] == 8
+
+
+def test_units_prefer_the_clearer_route_when_model_scores_are_close():
+    observation = sample_observation()
+    observation["observation"]["battlefield"]["tiles"][2][3]["feature"] = "marsh"
+
+    action = choose_action(FixedMovePolicy([0.0, 1.0, 1.0]), observation)
+
+    assert action["path"] == 8
 
 
 def test_a_choice_that_depends_on_the_battlefield_can_be_learned():

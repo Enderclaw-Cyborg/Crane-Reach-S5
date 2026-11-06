@@ -17,6 +17,50 @@ from encoder import (
     target_options,
 )
 from imitation_model import load_policy
+from sandbox.crane import paths, tile, units
+from sandbox.env.skirmish_crane.tile_types import TILE_TYPES
+
+
+def _terrain_penalty(observation, path):
+    """Measure extra movement cost and entry damage along a legal path."""
+    position = observation["observation"]["self"]["position"]
+    penalty = 0
+    for direction in paths.decode(path):
+        position = tile.neighbors(position)[direction]
+        ground = tile.terrain_at(observation, position)
+        terrain_cost = TILE_TYPES.terrains[ground["terrain"]].move_cost
+        feature = TILE_TYPES.features[ground["feature"]]
+        penalty += max(0, terrain_cost + feature.move_cost_delta - 1) + feature.entry_damage
+    return penalty
+
+
+def _preferred_moves(observation, moves):
+    """Restrict archer and cavalry choices to their defining movement behavior."""
+    own = observation["observation"]["self"]
+    kind = own["type"]
+    if kind == "cavalry":
+        longest = max(len(paths.decode(path)) for path, _ in moves)
+        return [index for index, (path, _) in enumerate(moves) if len(paths.decode(path)) == longest]
+
+    if kind == "archer":
+        own_side = own["unit_id"].split("_", 1)[0]
+        enemies = [
+            unit for unit in observation["observation"]["visible_units"] if unit["side"] != own_side
+        ]
+        if enemies:
+            nearest = min(enemies, key=lambda unit: tile.distance(own["position"], unit["position"]))
+            distances = [tile.distance(end, nearest["position"]) for _, end in moves]
+            reach = units.STATS["archer"].attack_range
+            in_range = [index for index, distance in enumerate(distances) if distance <= reach]
+            eligible = in_range or list(range(len(moves)))
+            preferred_distance = (
+                max(distances[index] for index in eligible)
+                if in_range
+                else min(distances[index] for index in eligible)
+            )
+            return [index for index in eligible if distances[index] == preferred_distance]
+
+    return list(range(len(moves)))
 
 
 def option_tensor(rows):
@@ -40,7 +84,16 @@ def choose_action(model, observation):
     move_rows = option_tensor([describe_move(observation, end) for _, end in moves])
     move_mask = torch.ones((1, len(moves)), dtype=torch.bool)
     scores = model.score_moves(context, entity_mask, move_rows, move_mask)
-    path, end = moves[int(scores[0].argmax())]
+    score_scale = scores[0].std(unbiased=False).clamp(min=0.1)
+    terrain_penalties = torch.tensor(
+        [_terrain_penalty(observation, path) for path, _ in moves],
+        dtype=scores.dtype,
+        device=scores.device,
+    )
+    adjusted_scores = scores[0] - terrain_penalties * score_scale
+    preferred = _preferred_moves(observation, moves)
+    preferred_scores = adjusted_scores[preferred]
+    path, end = moves[preferred[int(preferred_scores.argmax())]]
 
     # Describe targets from the tile we actually chose. The pointers connect target IDs
     # to the enemy tokens in context; -1 selects the model's learned no-target value.

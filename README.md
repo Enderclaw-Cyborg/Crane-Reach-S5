@@ -1,3 +1,7 @@
+##AI Disclosure
+
+I had to restructure the agent from the ground up due to errors with the previous seasons. Allies no longer form a phalanx around the archers and should properly avoid negative terrain.
+
 # Skirmish at Crane Reach: Imitate Your Army
 
 In this example, a game AI agent you already have becomes the **teacher**, and a new agent, the **learner**, learns to imitate it. You record the teacher's choices for footmen, archers, and cavalry, train a small neural network on them with [PyTorch](https://pytorch.org/tutorials/beginner/basics/intro.html), and compare the two armies on new seeds. This approach is called **imitation learning**.
